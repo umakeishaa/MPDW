@@ -1,0 +1,517 @@
+---
+title: "Pertemuan 2 MPDW - Prak"
+author: "Uma Keisha Abriana"
+date: "2026-08-26"
+output: html_document
+---
+
+# Package
+
+```{r}
+library("forecast")
+library("graphics")
+library("TTR")
+library("TSA")
+library("ggplot2")
+```
+
+# Data
+
+```{r}
+library(readxl)
+data <- read_excel("D:\\SEM 5\\MPDW\\data mpdw prak.xlsx")
+head(data)
+```
+
+# Normalisasikan
+
+```{r}
+str(data)
+```
+
+```{r}
+data$CPIAUCSL_PC1 <- as.numeric(
+  gsub(",", "", data$CPIAUCSL_PC1)
+)
+str(data)
+```
+
+# Mengubah data agar terbaca sebagai data deret waktu dengan fungsi ts()
+
+```{r}
+data.ts <- ts(data$CPIAUCSL_PC1)
+data.ts
+```
+
+```{r}
+summary(data.ts)
+```
+
+# Plot data deret waktu
+
+```{r}
+ts.plot(data.ts, xlab="Time Period ", ylab="CPIAUCSL_PC1", 
+        main = "Time Series Plot")
+points(data.ts)
+```
+
+# Pembagian Data (Data Latih & Data Uji)
+
+Pembagian data latih dan data uji dilakukan dengan perbandingan 80% data latih dan 20% data uji. Pembagian ini dipakai bersama oleh seluruh metode di bawah, sehingga cukup dijalankan sekali.
+
+```{r}
+# hitung jumlah data
+n <- nrow(data)
+
+# tentukan batas 80%
+n_train <- floor(0.8 * n)
+n_test  <- n - n_train
+
+# bagi data
+training <- data[1:n_train, ]
+testing  <- data[(n_train+1):n, ]
+
+# ubah ke time series
+train.ts <- ts(training$CPIAUCSL_PC1)
+test.ts  <- ts(testing$CPIAUCSL_PC1)
+```
+
+```{r}
+# cek jumlah data
+cat("Jumlah data training :", nrow(training), "\n")
+cat("Jumlah data testing  :", nrow(testing), "\n")
+cat("Total data           :", nrow(training) + nrow(testing), "\n")
+```
+
+```{r}
+#eksplorasi keseluruhan data
+plot(data.ts, col="red", main="Plot semua data")
+points(data.ts)
+```
+
+```{r}
+#eksplorasi data latih
+plot(train.ts, col="blue", main="Plot data latih")
+points(train.ts)
+```
+
+```{r}
+#eksplorasi data uji
+plot(test.ts, col="blue", main="Plot data uji")
+points(test.ts)
+```
+
+```{r}
+ggplot() +
+  geom_line(
+    data = training,
+    aes(x = observation_date, y = CPIAUCSL_PC1, col = "Data Latih")
+  ) +
+  geom_line(
+    data = testing,
+    aes(x = observation_date, y = CPIAUCSL_PC1, col = "Data Uji")
+  ) +
+  labs(x = "Periode", y = "CPIAUCSL_PC1", col = "Keterangan") +
+  scale_colour_manual(
+    name = "Keterangan:",
+    breaks = c("Data Latih", "Data Uji"),
+    values = c("blue", "red")
+  ) +
+  theme_bw() +
+  theme(legend.position = "bottom")
+```
+
+# Metode 1: Single Moving Average (SMA)
+
+Ide dasar SMA adalah data pemulusan pada periode ke-t merupakan rata-rata dari m buah data pada periode ke-t hingga periode ke (t-m+1). Metode ini cocok untuk pola data stasioner/konstan.
+
+## Pemulusan
+
+```{r}
+m_sma <- 4   # ubah sesuai kebutuhan
+data.sma <- SMA(train.ts, n = m_sma)
+data.sma
+```
+
+## Peramalan
+
+Data pemulusan pada periode ke-t digunakan sebagai nilai peramalan pada periode ke t+1.
+
+```{r}
+data.ramal <- c(NA, data.sma)
+data.ramal #forecast 1 periode ke depan
+```
+
+Selanjutnya dilakukan peramalan sebanyak data uji. Pada metode SMA, seluruh hasil peramalan ke depan akan memiliki nilai yang sama dengan hasil ramalan satu periode ke depan.
+
+```{r}
+data.gab.sma <- cbind(
+  aktual    = c(data.ts),
+  pemulusan = c(data.sma, rep(NA, n_test)),
+  ramalan   = c(data.ramal, rep(data.ramal[length(data.ramal)], n_test - 1))
+)
+data.gab.sma
+```
+
+## Plot Deret Waktu
+
+```{r}
+ts.plot(data.ts, xlab="Time Period ", ylab="CPIAUCSL_PC1", main = paste("SMA N =", m_sma))
+points(data.ts)
+lines(data.gab.sma[,2], col="green", lwd=2)
+lines(data.gab.sma[,3], col="red", lwd=2)
+legend("topleft", c("data aktual","data pemulusan","data peramalan"), lty=8,
+       col=c("black","green","red"), cex=0.5)
+```
+
+## Akurasi Data Latih
+
+```{r}
+#Menghitung nilai keakuratan data latih
+error_train.sma <- train.ts - data.ramal[1:length(train.ts)]
+
+SSE_train.sma  <- sum(error_train.sma[(m_sma+1):length(train.ts)]^2)
+MSE_train.sma  <- mean(error_train.sma[(m_sma+1):length(train.ts)]^2)
+MAPE_train.sma <- mean(abs((error_train.sma[(m_sma+1):length(train.ts)]/train.ts[(m_sma+1):length(train.ts)])*100))
+
+akurasi_train.sma <- matrix(c(SSE_train.sma, MSE_train.sma, MAPE_train.sma))
+row.names(akurasi_train.sma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_train.sma)  <- paste("Akurasi m =", m_sma)
+akurasi_train.sma
+```
+
+## Akurasi Data Uji
+
+```{r}
+#Menghitung nilai keakuratan data uji
+error_test.sma <- test.ts - data.gab.sma[(n_train+1):n, 3]
+
+SSE_test.sma  <- sum(error_test.sma^2)
+MSE_test.sma  <- mean(error_test.sma^2)
+MAPE_test.sma <- mean(abs((error_test.sma/test.ts*100)))
+
+akurasi_test.sma <- matrix(c(SSE_test.sma, MSE_test.sma, MAPE_test.sma))
+row.names(akurasi_test.sma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_test.sma)  <- paste("Akurasi m =", m_sma)
+akurasi_test.sma
+```
+
+# Metode 2: Double Moving Average (DMA)
+
+DMA dilakukan dengan memulus ulang hasil SMA, sehingga mampu menangkap data yang memiliki pola tren.
+
+## Pemulusan & Peramalan
+
+```{r}
+dma <- SMA(data.sma, n = m_sma)
+At  <- 2*data.sma - dma
+Bt  <- 2/(m_sma-1)*(data.sma - dma)
+data.dma    <- At + Bt
+data.ramal2 <- c(NA, data.dma)
+
+t <- 1:n_test
+f <- c()
+for (i in t) {
+  f[i] <- At[length(At)] + Bt[length(Bt)]*(i)
+}
+
+data.gab.dma <- cbind(
+  aktual     = c(data.ts),
+  pemulusan1 = c(data.sma, rep(NA, n_test)),
+  pemulusan2 = c(dma, rep(NA, n_test)),
+  At         = c(At, rep(NA, n_test)),
+  Bt         = c(Bt, rep(NA, n_test)),
+  ramalan    = c(data.ramal2, f[-1])
+)
+data.gab.dma
+```
+
+## Plot Deret Waktu
+
+```{r}
+ts.plot(data.ts, xlab="Time Period ", ylab="CPIAUCSL_PC1", main = paste("DMA N =", m_sma))
+points(data.ts)
+lines(data.gab.dma[,3], col="green", lwd=2)
+lines(data.gab.dma[,6], col="red", lwd=2)
+legend("topleft", c("data aktual","data pemulusan","data peramalan"), lty=8,
+       col=c("black","green","red"), cex=0.8)
+```
+
+## Akurasi Data Latih
+
+```{r}
+#Menghitung nilai keakuratan data latih
+error_train.dma <- train.ts - data.ramal2[1:length(train.ts)]
+
+start_dma <- 2*m_sma
+SSE_train.dma  <- sum(error_train.dma[start_dma:length(train.ts)]^2)
+MSE_train.dma  <- mean(error_train.dma[start_dma:length(train.ts)]^2)
+MAPE_train.dma <- mean(abs((error_train.dma[start_dma:length(train.ts)]/train.ts[start_dma:length(train.ts)])*100))
+
+akurasi_train.dma <- matrix(c(SSE_train.dma, MSE_train.dma, MAPE_train.dma))
+row.names(akurasi_train.dma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_train.dma)  <- paste("Akurasi m =", m_sma)
+akurasi_train.dma
+```
+
+## Akurasi Data Uji
+
+```{r}
+#Menghitung nilai keakuratan data uji
+error_test.dma <- test.ts - data.gab.dma[(n_train+1):n, 6]
+
+SSE_test.dma  <- sum(error_test.dma^2)
+MSE_test.dma  <- mean(error_test.dma^2)
+MAPE_test.dma <- mean(abs((error_test.dma/test.ts*100)))
+
+akurasi_test.dma <- matrix(c(SSE_test.dma, MSE_test.dma, MAPE_test.dma))
+row.names(akurasi_test.dma) <- c("SSE", "MSE", "MAPE")
+colnames(akurasi_test.dma)  <- paste("Akurasi m =", m_sma)
+akurasi_test.dma
+```
+
+# Metode 3: Single Exponential Smoothing (SES)
+
+SES memberi bobot yang menurun secara eksponensial pada data lama, sehingga data terbaru diberi bobot lebih besar. Cocok untuk data dengan pola stasioner/konstan. Ada dua cara membangun SES: fungsi `ses()` dari package `forecast`, atau fungsi `HoltWinters()` dari package `stats`.
+
+## Cara 1: fungsi ses()
+
+```{r}
+h_forecast <- n_test
+
+ses.1 <- ses(train.ts, h = h_forecast, alpha = 0.2)
+plot(ses.1)
+```
+
+```{r}
+ses.1
+```
+
+```{r}
+ses.2 <- ses(train.ts, h = h_forecast, alpha = 0.7)
+plot(ses.2)
+```
+
+```{r}
+ses.2
+```
+
+```{r}
+autoplot(ses.1) +
+  autolayer(fitted(ses.1), series="Fitted") +
+  ylab("CPIAUCSL_PC1") + xlab("Periode")
+```
+
+## Cara 2: fungsi HoltWinters()
+
+```{r}
+ses1 <- HoltWinters(train.ts, gamma = FALSE, beta = FALSE, alpha = 0.2)
+plot(ses1)
+```
+
+```{r}
+ramalan1 <- forecast(ses1, h = h_forecast)
+ramalan1
+```
+
+```{r}
+ses2 <- HoltWinters(train.ts, gamma = FALSE, beta = FALSE, alpha = 0.7)
+plot(ses2)
+```
+
+```{r}
+ramalan2 <- forecast(ses2, h = h_forecast)
+ramalan2
+```
+
+## Parameter Alpha Optimum
+
+Nilai parameter alpha dapat dioptimalkan menyesuaikan error paling minimum, dengan membuat alpha = NULL.
+
+```{r}
+ses.opt <- ses(train.ts, h = h_forecast, alpha = NULL)
+plot(ses.opt)
+ses.opt
+```
+
+```{r}
+HWopt <- HoltWinters(train.ts, gamma = FALSE, beta = FALSE, alpha = NULL)
+HWopt
+plot(HWopt)
+```
+
+```{r}
+ramalanopt <- forecast(HWopt, h = h_forecast)
+ramalanopt
+```
+
+## Akurasi Data Latih
+
+```{r}
+#Keakuratan Metode - Pada data training
+# SES dengan alpha = 0.2
+SSE1  <- ses1$SSE
+MSE1  <- ses1$SSE/length(train.ts)
+RMSE1 <- sqrt(MSE1)
+
+# SES dengan alpha = 0.7
+SSE2  <- ses2$SSE
+MSE2  <- ses2$SSE/length(train.ts)
+RMSE2 <- sqrt(MSE2)
+
+akurasi_train.ses <- data.frame(
+  Skenario = c("alpha=0.2", "alpha=0.7"),
+  SSE  = c(SSE1, SSE2),
+  MSE  = c(MSE1, MSE2),
+  RMSE = c(RMSE1, RMSE2)
+)
+akurasi_train.ses
+```
+
+## Akurasi Data Uji
+
+```{r}
+# error (ramalan - aktual)
+e1   <- as.numeric(ramalan1$mean)[1:n_test] - as.numeric(testing$CPIAUCSL_PC1)
+e2   <- as.numeric(ramalan2$mean)[1:n_test] - as.numeric(testing$CPIAUCSL_PC1)
+eopt <- as.numeric(ramalanopt$mean)[1:n_test] - as.numeric(testing$CPIAUCSL_PC1)
+
+SSEtesting1  <- sum(e1^2, na.rm = TRUE);  MSEtesting1  <- mean(e1^2, na.rm = TRUE);  RMSEtesting1  <- sqrt(MSEtesting1)
+SSEtesting2  <- sum(e2^2, na.rm = TRUE);  MSEtesting2  <- mean(e2^2, na.rm = TRUE);  RMSEtesting2  <- sqrt(MSEtesting2)
+SSEtestingopt<- sum(eopt^2, na.rm = TRUE);MSEtestingopt<- mean(eopt^2, na.rm = TRUE);RMSEtestingopt<- sqrt(MSEtestingopt)
+
+akurasi_test.ses <- data.frame(
+  Skenario = c("alpha=0.2", "alpha=0.7", "alpha optimum"),
+  SSE  = c(SSEtesting1, SSEtesting2, SSEtestingopt),
+  MSE  = c(MSEtesting1, MSEtesting2, MSEtestingopt),
+  RMSE = c(RMSEtesting1, RMSEtesting2, RMSEtestingopt)
+)
+akurasi_test.ses
+```
+
+```{r}
+# Atau menggunakan fungsi accuracy() dari package forecast
+accuracy(ramalan1, testing$CPIAUCSL_PC1)
+accuracy(ramalan2, testing$CPIAUCSL_PC1)
+accuracy(ramalanopt, testing$CPIAUCSL_PC1)
+```
+
+# Metode 4: Double Exponential Smoothing (DES)
+
+DES digunakan untuk data yang memiliki pola tren. Prinsipnya seperti SES namun dilakukan dua kali, yaitu untuk tahap 'level' dan tahap 'tren'. Kali ini argumen `beta` diinisialisasi bersamaan dengan `alpha`.
+
+## Pemulusan
+
+```{r}
+# Skenario 1
+des.1 <- HoltWinters(train.ts, gamma = FALSE, beta = 0.2, alpha = 0.2)
+plot(des.1)
+ramalandes1 <- forecast(des.1, h = h_forecast)
+ramalandes1
+```
+
+```{r}
+# Skenario 2
+des.2 <- HoltWinters(train.ts, gamma = FALSE, beta = 0.3, alpha = 0.6)
+plot(des.2)
+ramalandes2 <- forecast(des.2, h = h_forecast)
+ramalandes2
+```
+
+```{r}
+plot(train.ts)
+lines(des.1$fitted[,1], lty=2, col="blue")
+lines(ramalandes1$mean, col="red")
+```
+
+## Parameter Optimum
+
+```{r}
+des.opt <- HoltWinters(train.ts, gamma = FALSE)
+des.opt
+plot(des.opt)
+ramalandesopt <- forecast(des.opt, h = h_forecast)
+ramalandesopt
+```
+
+## Akurasi Data Latih
+
+```{r}
+ssedes.train1 <- des.1$SSE
+msedes.train1 <- ssedes.train1/length(train.ts)
+sisaandes1 <- ramalandes1$residuals
+mapedes.train1 <- sum(abs(sisaandes1[3:length(train.ts)]/train.ts[3:length(train.ts)])*100,
+                       na.rm = TRUE)/length(train.ts)
+
+ssedes.train2 <- des.2$SSE
+msedes.train2 <- ssedes.train2/length(train.ts)
+sisaandes2 <- ramalandes2$residuals
+mapedes.train2 <- sum(abs(sisaandes2[3:length(train.ts)]/train.ts[3:length(train.ts)])*100,
+                       na.rm = TRUE)/length(train.ts)
+
+akurasi_train.des <- data.frame(
+  Skenario = c("alpha=0.2;beta=0.2", "alpha=0.6;beta=0.3"),
+  SSE  = c(ssedes.train1, ssedes.train2),
+  MSE  = c(msedes.train1, msedes.train2),
+  MAPE = c(mapedes.train1, mapedes.train2)
+)
+akurasi_train.des
+```
+
+## Akurasi Data Uji
+
+```{r}
+selisihdes1 <- ramalandes1$mean - testing$CPIAUCSL_PC1
+SSEtestingdes1  <- sum(selisihdes1^2)
+MSEtestingdes1  <- SSEtestingdes1/length(testing$CPIAUCSL_PC1)
+MAPEtestingdes1 <- sum(abs(selisihdes1/testing$CPIAUCSL_PC1)*100)/length(testing$CPIAUCSL_PC1)
+
+selisihdes2 <- ramalandes2$mean - testing$CPIAUCSL_PC1
+SSEtestingdes2  <- sum(selisihdes2^2)
+MSEtestingdes2  <- SSEtestingdes2/length(testing$CPIAUCSL_PC1)
+MAPEtestingdes2 <- sum(abs(selisihdes2/testing$CPIAUCSL_PC1)*100)/length(testing$CPIAUCSL_PC1)
+
+selisihdesopt <- ramalandesopt$mean - testing$CPIAUCSL_PC1
+SSEtestingdesopt  <- sum(selisihdesopt^2)
+MSEtestingdesopt  <- SSEtestingdesopt/length(testing$CPIAUCSL_PC1)
+MAPEtestingdesopt <- sum(abs(selisihdesopt/testing$CPIAUCSL_PC1)*100)/length(testing$CPIAUCSL_PC1)
+
+akurasi_test.des <- data.frame(
+  Skenario = c("alpha=0.2;beta=0.2", "alpha=0.6;beta=0.3", "optimum"),
+  SSE  = c(SSEtestingdes1, SSEtestingdes2, SSEtestingdesopt),
+  MSE  = c(MSEtestingdes1, MSEtestingdes2, MSEtestingdesopt),
+  MAPE = c(MAPEtestingdes1, MAPEtestingdes2, MAPEtestingdesopt)
+)
+akurasi_test.des
+```
+
+## Perbandingan SES vs DES
+
+```{r}
+MSEfull <- data.frame(
+  Skenario = c("ske 1", "ske 2", "ske optimum"),
+  SES = c(MSEtesting1, MSEtesting2, MSEtestingopt),
+  DES = c(MSEtestingdes1, MSEtestingdes2, MSEtestingdesopt)
+)
+MSEfull
+```
+
+# Perbandingan Seluruh Metode
+
+Ringkasan akurasi data uji (MSE) dari SMA, DMA, SES, dan DES, untuk membantu menentukan metode terbaik bagi data yang digunakan.
+
+```{r}
+perbandingan_metode <- data.frame(
+  Metode = c("SMA", "DMA",
+             "SES (alpha=0.2)", "SES (alpha=0.7)", "SES (optimum)",
+             "DES (ske 1)", "DES (ske 2)", "DES (optimum)"),
+  MSE_Testing = c(MSE_test.sma, MSE_test.dma,
+                  MSEtesting1, MSEtesting2, MSEtestingopt,
+                  MSEtestingdes1, MSEtestingdes2, MSEtestingdesopt)
+)
+perbandingan_metode[order(perbandingan_metode$MSE_Testing), ]
+```
+
+Berdasarkan hasil evaluasi pada data uji, DES skenario 2 (alpha = 0,6; beta = 0,3) terpilih sebagai metode pemulusan/peramalan terbaik karena menghasilkan nilai Mean Squared Error (MSE) terkecil dibanding metode yang lain.
+
+MSE digunakan sebagai kriteria pemilihan karena secara statistik merepresentasikan rata-rata kuadrat galat (selisih) antara nilai hasil peramalan dan nilai aktual. Semakin kecil nilainya, semakin dekat pola hasil pemulusan/peramalan model terhadap data sebenarnya. Sehingga, model dengan MSE terendah dianggap memiliki tingkat kesalahan prediksi paling rendah dan generalisasi terbaik terhadap data di luar data latih.
