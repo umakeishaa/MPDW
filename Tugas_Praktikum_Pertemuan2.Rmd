@@ -1,0 +1,306 @@
+---
+title: "Tugas Praktikum Pertemuan 2 MPDW"
+author: "Uma Keisha Abriana"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align = "center")
+```
+
+```{r}
+library(readxl)      
+library(lmtest)      
+library(ggplot2)     
+
+if (!requireNamespace("orcutt", quietly = TRUE)) {
+  install.packages("orcutt", repos = "https://cloud.r-project.org")
+}
+library(orcutt)
+```
+
+```{r}
+hildreth_lu <- function(y, x, rho_range = seq(-0.99, 0.99, by = 0.01)) {
+  n <- length(y)
+  sse <- numeric(length(rho_range))
+
+  for (i in seq_along(rho_range)) {
+    rho <- rho_range[i]
+    y_star <- y[-1] - rho * y[-n]
+    x_star <- x[-1] - rho * x[-n]
+    model_star <- lm(y_star ~ x_star)
+    sse[i] <- sum(residuals(model_star)^2)
+  }
+
+  best_rho <- rho_range[which.min(sse)]
+
+  y_star <- y[-1] - best_rho * y[-n]
+  x_star <- x[-1] - best_rho * x[-n]
+  model_final <- lm(y_star ~ x_star)
+
+  intercept <- unname(coef(model_final)[1] / (1 - best_rho))
+  slope     <- unname(coef(model_final)[2])
+
+  list(
+    rho_optimum   = best_rho,
+    sse_grid      = data.frame(rho = rho_range, SSE = sse),
+    model_transformasi = model_final,
+    koefisien_asli = c(intercept = intercept, slope = slope)
+  )
+}
+```
+
+
+# Soal 1: Market Share dan Price
+
+## Eksplorasi Data
+
+```{r}
+soal1 <- read_excel("D:\\SEM 5\\MPDW\\data_praktikum2.xlsx", sheet = "Soal1_MarketShare_Price")
+str(soal1)
+summary(soal1)
+```
+
+```{r}
+ggplot(soal1, aes(x = Price, y = Market_share)) +
+  geom_point(color = "steelblue", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred") +
+  labs(title = "Hubungan Price terhadap Market Share",
+       x = "Price", y = "Market Share") +
+  theme_minimal()
+```
+
+## Model Regresi OLS
+
+```{r}
+model1 <- lm(Market_share ~ Price, data = soal1)
+summary(model1)
+```
+
+## Pemeriksaan Asumsi Autokorelasi
+
+### Plot Sisaan
+
+```{r}
+par(mfrow = c(1, 2))
+plot(residuals(model1), type = "b", pch = 19, col = "steelblue",
+     main = "Plot Sisaan vs Urutan Pengamatan",
+     xlab = "Urutan Pengamatan", ylab = "Sisaan")
+abline(h = 0, col = "red", lty = 2)
+
+acf(residuals(model1), main = "ACF Sisaan Model 1")
+par(mfrow = c(1, 1))
+```
+
+### Uji Durbin-Watson
+
+```{r dw-soal1}
+dwtest(model1)
+```
+
+**Interpretasi:** Diperoleh $DW = 1.1358$ dengan *p-value* $= 0.009813$. Nilai
+ini di bawah $d_L = 1.20$ (tabel DW, $n=20$, $k=1$, $\alpha=5\%$) dan
+*p-value* $< 0.05$, sehingga tolak $H_0$: terdapat autokorelasi **positif**
+pada sisaan. Perlu dilakukan penanganan.
+
+## Penanganan Autokorelasi
+
+### Metode Cochrane-Orcutt
+
+```{r}
+model1_co <- cochrane.orcutt(model1)
+model1_co
+```
+
+```{r}
+# Uji Durbin-Watson ulang setelah penanganan Cochrane-Orcutt
+dwtest_co1 <- model1_co$DW
+dwtest_co1
+```
+
+### Metode Hildreth-Lu
+
+```{r}
+model1_hl <- hildreth_lu(soal1$Market_share, soal1$Price)
+
+cat("Rho optimum (Hildreth-Lu):", model1_hl$rho_optimum, "\n")
+model1_hl$koefisien_asli
+summary(model1_hl$model_transformasi)
+```
+
+```{r}
+ggplot(model1_hl$sse_grid, aes(x = rho, y = SSE)) +
+  geom_line(color = "steelblue") +
+  geom_vline(xintercept = model1_hl$rho_optimum, color = "darkred", linetype = "dashed") +
+  labs(title = "Pencarian Rho Optimum - Metode Hildreth-Lu (Soal 1)",
+       x = expression(rho), y = "SSE") +
+  theme_minimal()
+```
+
+```{r}
+dwtest(model1_hl$model_transformasi)
+```
+
+### Perbandingan Model
+
+```{r}
+# Ambil DW & p-value tiap model
+dw_awal <- dwtest(model1)
+dw_co   <- dwtest(model1_co)          # atau dwtest(model1CO) kalau pakai orcutt::cochrane.orcutt
+dw_hl   <- dwtest(model1_hl$model_transformasi)
+
+tabel_dw <- data.frame(
+  Metode     = c("OLS (awal)", "Cochrane-Orcutt", "Hildreth-Lu"),
+  Rho        = c(NA, model1_co$rho, model1_hl$rho_optimum),
+  DW         = c(dw_awal$statistic, dw_co$statistic, dw_hl$statistic),
+  p_value    = c(dw_awal$p.value, dw_co$p.value, dw_hl$p.value),
+  Kesimpulan = c(
+    ifelse(dw_awal$p.value < 0.05, "Ada autokorelasi", "Tidak ada autokorelasi"),
+    ifelse(dw_co$p.value   < 0.05, "Ada autokorelasi", "Tidak ada autokorelasi"),
+    ifelse(dw_hl$p.value   < 0.05, "Ada autokorelasi", "Tidak ada autokorelasi")
+  )
+)
+
+tabel_dw
+```
+
+# Soal 2: Sales dan Advertising
+
+## Eksplorasi Data
+
+```{r}
+soal2 <- read_excel("D:\\SEM 5\\MPDW\\data_praktikum2.xlsx", sheet = "Soal2_Sales_Advertising")
+str(soal2)
+summary(soal2)
+```
+
+```{r}
+ggplot(soal2, aes(x = Advertising, y = Sales)) +
+  geom_point(color = "steelblue", size = 2) +
+  geom_smooth(method = "lm", se = FALSE, color = "darkred") +
+  labs(title = "Hubungan Advertising terhadap Sales",
+       x = "Advertising", y = "Sales") +
+  theme_minimal()
+```
+
+## Model Regresi OLS
+
+```{r}
+model2 <- lm(Sales ~ Advertising, data = soal2)
+summary(model2)
+```
+
+## Pemeriksaan Asumsi Autokorelasi
+
+### Plot Sisaan
+
+```{r}
+par(mfrow = c(1, 2))
+plot(residuals(model2), type = "b", pch = 19, col = "steelblue",
+     main = "Plot Sisaan vs Urutan Pengamatan",
+     xlab = "Urutan Pengamatan", ylab = "Sisaan")
+abline(h = 0, col = "red", lty = 2)
+
+acf(residuals(model2), main = "ACF Sisaan Model 2")
+par(mfrow = c(1, 1))
+```
+
+### Uji Durbin-Watson
+
+```{r}
+dwtest(model2)
+```
+
+**Interpretasi:** Diperoleh $DW = 0.16204$ dengan *p-value* $< 2.2\times10^{-16}$.
+Nilai ini jauh di bawah $d_L = 1.44$ (tabel DW, $n=40$, $k=1$, $\alpha=5\%$)
+dan *p-value* $< 0.05$, sehingga tolak $H_0$: terdapat autokorelasi
+**positif** yang sangat kuat pada sisaan. Perlu dilakukan penanganan.
+
+## Penanganan Autokorelasi
+
+### Metode Cochrane-Orcutt
+
+```{r}
+model2_co <- cochrane.orcutt(model2)
+model2_co
+```
+
+```{r}
+dwtest_co2 <- model2_co$DW
+dwtest_co2
+```
+
+### Metode Hildreth-Lu
+
+```{r}
+model2_hl <- hildreth_lu(soal2$Sales, soal2$Advertising)
+
+cat("Rho optimum (Hildreth-Lu):", model2_hl$rho_optimum, "\n")
+model2_hl$koefisien_asli
+summary(model2_hl$model_transformasi)
+```
+
+```{r}
+ggplot(model2_hl$sse_grid, aes(x = rho, y = SSE)) +
+  geom_line(color = "steelblue") +
+  geom_vline(xintercept = model2_hl$rho_optimum, color = "darkred", linetype = "dashed") +
+  labs(title = "Pencarian Rho Optimum - Metode Hildreth-Lu (Soal 2)",
+       x = expression(rho), y = "SSE") +
+  theme_minimal()
+```
+
+```{r}
+dwtest(model2_hl$model_transformasi)
+```
+
+### Perbandingan Model
+
+```{r}
+dw_awal2 <- dwtest(model2)
+dw_co2   <- dwtest(model2_co)         
+dw_hl2   <- dwtest(model2_hl$model_transformasi)
+
+tabel_dw2 <- data.frame(
+  Metode     = c("OLS (awal)", "Cochrane-Orcutt", "Hildreth-Lu"),
+  Rho        = c(NA, model2_co$rho, model2_hl$rho_optimum),
+  DW         = c(dw_awal2$statistic, dw_co2$statistic, dw_hl2$statistic),
+  p_value    = c(dw_awal2$p.value, dw_co2$p.value, dw_hl2$p.value),
+  Kesimpulan = c(
+    ifelse(dw_awal2$p.value < 0.05, "Ada autokorelasi", "Tidak ada autokorelasi"),
+    ifelse(dw_co2$p.value   < 0.05, "Ada autokorelasi", "Tidak ada autokorelasi"),
+    ifelse(dw_hl2$p.value   < 0.05, "Ada autokorelasi", "Tidak ada autokorelasi")
+  )
+)
+
+tabel_dw2
+```
+
+**Interpretasi:** Setelah penanganan, nilai DW naik dari $0.1620$ menjadi
+$1.939$ (Cochrane-Orcutt) dan $1.940$ (Hildreth-Lu), dengan *p-value*
+masing-masing $0.378$ dan $0.378$ (keduanya > 0.05). Artinya autokorelasi
+pada sisaan **sudah teratasi** pada kedua metode.
+
+# Kesimpulan
+
+Model regresi awal pada kedua soal melanggar asumsi non-autokorelasi:
+Model 1 (Market Share ~ Price) memiliki $DW = 1.1358$ (*p-value* $= 0.0098$)
+dan Model 2 (Sales ~ Advertising) memiliki $DW = 0.1620$
+(*p-value* $< 2.2\times10^{-16}$), keduanya menunjukkan autokorelasi
+**positif** pada sisaan.
+
+Setelah dilakukan penanganan dengan metode **Cochrane-Orcutt** dan
+**Hildreth-Lu**, autokorelasi pada kedua model berhasil diatasi. Nilai DW
+naik mendekati 2 dan *p-value* menjadi tidak signifikan (> 0.05) pada kedua
+metode:
+
+- Model 1: DW naik menjadi $1.958$ (CO) dan $1.966$ (HL), rho $\approx 0.43$.
+- Model 2: DW naik menjadi $1.939$ (CO) dan $1.940$ (HL), rho $\approx 0.90$.
+
+Kedua metode penanganan menghasilkan nilai rho dan koefisien regresi yang
+hampir identik pada masing-masing model, menunjukkan bahwa **Cochrane-Orcutt
+dan Hildreth-Lu sama-sama efektif** dalam mengatasi autokorelasi pada data
+ini, sehingga model hasil penanganan lebih valid digunakan untuk inferensi
+dibandingkan model OLS awal.
