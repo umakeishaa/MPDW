@@ -1,0 +1,544 @@
+---
+title: "Tugas Gabungan PTM 3 MPDW"
+author: "Uma Keisha Abriana (M0401241022)"
+date: "2026-09-10"
+output: html_document
+---
+# Latihan 1
+
+Misalkan terdapat data pangsa pasar selama 20 periode dari suatu produk pasta gigi. Akan dilakukan pemodelan *distributed lag* dari pangsa pasar ($Y$) terhadap harga ($X$), kemudian ditentukan model terbaik.
+
+## *Packages*
+
+```{r}
+library(dLagM)
+library(MLmetrics)
+library(lmtest)
+library(car)
+```
+
+## Input Data
+
+Data pada soal dimasukkan secara langsung ke dalam `data.frame`.
+
+```{r}
+data1 <- data.frame(
+  Period = 1:20,
+  MarketShare = c(3.63, 4.20, 3.33, 4.54, 2.89,
+                  4.87, 4.90, 5.29, 6.18, 7.20,
+                  7.25, 6.09, 6.80, 8.65, 8.43,
+                  8.29, 7.18, 7.90, 8.45, 8.23),
+  Price = c(0.97, 0.95, 0.99, 0.91, 0.98,
+            0.90, 0.89, 0.86, 0.85, 0.82,
+            0.79, 0.83, 0.81, 0.77, 0.76,
+            0.80, 0.83, 0.79, 0.76, 0.78)
+)
+
+data1
+str(data1)
+```
+
+## Pembagian Data
+
+Sesuai alur pada materi, data dibagi menjadi data *training* dan data *testing*. Sebanyak 15 periode pertama digunakan sebagai data *training*, sedangkan 5 periode terakhir digunakan sebagai data *testing*.
+
+```{r}
+train1 <- data1[1:15, ]
+test1  <- data1[16:20, ]
+
+train1
+test1
+```
+
+```{r}
+# data time series
+train1.ts <- ts(train1)
+test1.ts  <- ts(test1)
+data1.ts  <- ts(data1)
+```
+
+*Distributed lag model* merupakan model ketika variabel dependen $Y_t$ dipengaruhi oleh nilai variabel independen pada periode sekarang dan/atau periode sebelumnya, seperti $X_t$, $X_{t-1}$, $X_{t-2}$, dan seterusnya.
+
+## Model Koyck
+
+Model Koyck merupakan salah satu bentuk *infinite distributed lag*. Model ini menggunakan asumsi bahwa pengaruh peubah independen semakin mengecil ketika jarak lag semakin jauh dari periode sekarang.
+
+Secara umum model Koyck dapat ditulis sebagai
+
+$$
+Y_t=\alpha(1-\lambda)+\beta_0X_t+\lambda Y_{t-1}+V_t
+$$
+
+dengan
+
+$$
+V_t=u_t-\lambda u_{t-1}.
+$$
+
+### Pemodelan
+
+Pemodelan Koyck dilakukan menggunakan fungsi `dLagM::koyckDlm()`.
+
+```{r}
+model.koyck1 <- koyckDlm(
+  x = train1$Price,
+  y = train1$MarketShare
+)
+
+summary(model.koyck1)
+```
+
+```{r}
+AIC(model.koyck1)
+BIC(model.koyck1)
+```
+
+Nilai *p-value* pada output `summary()` dapat digunakan untuk melihat peubah yang berpengaruh signifikan terhadap pangsa pasar pada taraf nyata 5%. Bentuk model hasil estimasi dapat dilihat langsung melalui koefisien berikut.
+
+```{r}
+coef(model.koyck1)
+```
+
+### Peramalan dan Akurasi
+
+Berikut adalah hasil peramalan pangsa pasar untuk 5 periode data *testing*.
+
+```{r}
+fore.koyck1 <- forecast(
+  model = model.koyck1,
+  x = test1$Price,
+  h = 5
+)
+
+fore.koyck1
+```
+
+```{r}
+mape.koyck1 <- MLmetrics::MAPE(
+  y_pred = fore.koyck1$forecasts,
+  y_true = test1$MarketShare
+)
+
+mape.koyck1
+```
+
+```{r}
+# akurasi data training
+GoF(model.koyck1)
+```
+
+## Regression with Distributed Lag
+
+Model *finite distributed lag* memasukkan $X_t$ beserta sejumlah lag dari $X$. Secara umum, untuk lag maksimum $q$, model dapat ditulis sebagai
+
+$$
+Y_t=\alpha+\beta_0X_t+\beta_1X_{t-1}+\cdots+\beta_qX_{t-q}+u_t.
+$$
+
+Pemodelan dilakukan menggunakan fungsi `dLagM::dlm()`.
+
+### Pemodelan Awal (Lag = 2)
+
+Sebagai model awal digunakan lag sebesar 2, mengikuti contoh pemodelan pada materi.
+
+```{r}
+model.dlm1 <- dlm(
+  x = train1$Price,
+  y = train1$MarketShare,
+  q = 2
+)
+
+summary(model.dlm1)
+```
+
+```{r}
+AIC(model.dlm1)
+BIC(model.dlm1)
+```
+
+Koefisien model dapat dilihat menggunakan perintah berikut.
+
+```{r}
+coef(model.dlm1)
+```
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.dlm1 <- forecast(
+  model = model.dlm1,
+  x = test1$Price,
+  h = 5
+)
+
+fore.dlm1
+```
+
+```{r}
+mape.dlm1 <- MLmetrics::MAPE(
+  fore.dlm1$forecasts,
+  test1$MarketShare
+)
+
+mape.dlm1
+```
+
+```{r}
+# akurasi data training
+GoF(model.dlm1)
+```
+
+### *Lag* Optimum
+
+Selanjutnya dicari lag optimum untuk model DLM menggunakan AIC. Semakin kecil nilai AIC, semakin baik model berdasarkan kriteria tersebut.
+
+Karena data *training* hanya terdiri atas 15 observasi, pencarian dibatasi sampai lag 6 agar jumlah observasi efektif tidak terlalu sedikit.
+
+```{r}
+lag.dlm1.opt <- finiteDLMauto(
+  formula = MarketShare ~ Price,
+  data = data.frame(train1),
+  q.min = 1,
+  q.max = 6,
+  model.type = "dlm",
+  error.type = "AIC",
+  trace = TRUE
+)
+
+lag.dlm1.opt
+```
+
+Output `finiteDLMauto()` telah diurutkan berdasarkan kriteria yang dipilih. Oleh karena itu, baris pertama menunjukkan lag dengan AIC terbaik.
+
+```{r}
+q.opt1 <- as.integer(lag.dlm1.opt[1, 1])
+q.opt1
+```
+
+Berdasarkan output di atas, lag optimum adalah `r q.opt1`. Selanjutnya dilakukan pemodelan kembali menggunakan lag tersebut.
+
+```{r}
+model.dlm1.opt <- dlm(
+  x = train1$Price,
+  y = train1$MarketShare,
+  q = q.opt1
+)
+
+summary(model.dlm1.opt)
+```
+
+```{r}
+AIC(model.dlm1.opt)
+BIC(model.dlm1.opt)
+```
+
+### Peramalan Model DLM Optimum
+
+```{r}
+fore.dlm1.opt <- forecast(
+  model = model.dlm1.opt,
+  x = test1$Price,
+  h = 5
+)
+
+fore.dlm1.opt
+```
+
+```{r}
+mape.dlm1.opt <- MLmetrics::MAPE(
+  fore.dlm1.opt$forecasts,
+  test1$MarketShare
+)
+
+mape.dlm1.opt
+```
+
+```{r}
+# akurasi data training
+GoF(model.dlm1.opt)
+```
+
+## Perbandingan Model Latihan 1
+
+Model dibandingkan menggunakan MAPE pada data *testing*. Model dengan MAPE terkecil dipilih karena memiliki kesalahan peramalan relatif paling kecil pada data yang tidak digunakan dalam proses estimasi.
+
+```{r}
+akurasi1 <- data.frame(
+  Model = c("Koyck", "DLM Lag 2", paste0("DLM Lag ", q.opt1)),
+  MAPE = c(mape.koyck1, mape.dlm1, mape.dlm1.opt)
+)
+
+akurasi1 <- akurasi1[order(akurasi1$MAPE), ]
+row.names(akurasi1) <- NULL
+akurasi1
+```
+
+```{r}
+model.terbaik1 <- akurasi1$Model[1]
+mape.terbaik1  <- akurasi1$MAPE[1]
+
+model.terbaik1
+mape.terbaik1
+```
+
+Berdasarkan nilai MAPE data *testing*, model terbaik untuk Latihan 1 adalah **`r model.terbaik1`** dengan MAPE sebesar **`r round(mape.terbaik1, 4)`**.
+
+### Plot Perbandingan
+
+```{r}
+plot(test1$Period, test1$MarketShare,
+     type = "b", pch = 16,
+     ylim = range(c(test1$MarketShare,
+                    fore.koyck1$forecasts,
+                    fore.dlm1$forecasts,
+                    fore.dlm1.opt$forecasts)),
+     xlab = "Period",
+     ylab = "Market Share",
+     main = "Perbandingan Aktual dan Hasil Peramalan")
+
+lines(test1$Period, fore.koyck1$forecasts, type = "b", pch = 1)
+lines(test1$Period, fore.dlm1$forecasts, type = "b", pch = 2)
+lines(test1$Period, fore.dlm1.opt$forecasts, type = "b", pch = 3)
+
+legend("topleft",
+       legend = c("Aktual", "Koyck", "DLM Lag 2", paste0("DLM Lag ", q.opt1)),
+       lty = 1,
+       pch = c(16, 1, 2, 3),
+       cex = 0.8)
+```
+
+# Latihan 2
+
+Pada Latihan 2 akan dilakukan pemodelan ARDL menggunakan data `Sales` sebagai peubah dependen dan `Advertising` sebagai peubah independen dari tahun 1975 sampai 2014.
+
+## Input Data
+
+```{r}
+data2 <- data.frame(
+  Year = 1975:2014,
+  Sales = c(
+    11.7, 12.0, 12.3, 12.8, 13.1,
+    13.6, 13.9, 14.4, 14.7, 15.3,
+    15.5, 15.8, 16.1, 16.6, 16.9,
+    16.7, 16.9, 17.4, 17.6, 17.9,
+    18.0, 17.9, 18.0, 18.2, 18.2,
+    18.3, 18.6, 19.2, 19.3, 19.5,
+    19.2, 19.3, 19.5, 20.0, 20.0,
+    19.9, 19.8, 19.9, 20.2, 21.0
+  ),
+  Advertising = c(
+    9.4, 9.6, 10.0, 10.4, 10.8,
+    10.9, 11.7, 12.2, 12.5, 12.9,
+    13.0, 13.2, 13.8, 14.2, 14.6,
+    14.4, 15.0, 15.4, 15.7, 15.9,
+    15.9, 16.0, 16.3, 16.2, 16.8,
+    17.3, 17.6, 18.1, 18.3, 18.5,
+    18.7, 18.9, 19.2, 20.0, 20.0,
+    20.3, 20.4, 21.0, 21.5, 22.1
+  )
+)
+
+data2
+str(data2)
+```
+
+## Pembagian Data
+
+Agar proporsi pembagian data sama seperti contoh pada materi, 75% observasi pertama digunakan untuk *training* dan 25% observasi terakhir untuk *testing*. Dengan 40 observasi, diperoleh 30 data *training* dan 10 data *testing*.
+
+```{r}
+train2 <- data2[1:30, ]
+test2  <- data2[31:40, ]
+
+train2
+test2
+```
+
+```{r}
+# data time series
+train2.ts <- ts(train2[, c("Sales", "Advertising")], start = 1975)
+test2.ts  <- ts(test2[, c("Sales", "Advertising")], start = 2005)
+data2.ts  <- ts(data2[, c("Sales", "Advertising")], start = 1975)
+```
+
+## Model Autoregressive Distributed Lag (ARDL)
+
+Model ARDL menggabungkan lag dari peubah independen dengan lag dari peubah dependen itu sendiri. Secara umum, model ARDL dengan satu peubah independen dapat ditulis sebagai
+
+$$
+Y_t=\alpha+\sum_{i=0}^{p}\beta_iX_{t-i}+\sum_{j=1}^{q}\phi_jY_{t-j}+u_t.
+$$
+
+Pada fungsi `ardlDlm()`, $p$ menunjukkan panjang lag peubah independen dan $q$ menunjukkan ordo autoregressive dari peubah dependen.
+
+### Pemodelan Awal ARDL(1,1)
+
+Sebagai model awal digunakan $p=1$ dan $q=1$, sesuai dengan contoh pada materi.
+
+```{r}
+model.ardl2 <- ardlDlm(
+  formula = Sales ~ Advertising,
+  data = train2,
+  p = 1,
+  q = 1
+)
+
+summary(model.ardl2)
+```
+
+```{r}
+AIC(model.ardl2)
+BIC(model.ardl2)
+```
+
+### Peramalan dan Akurasi
+
+```{r}
+fore.ardl2 <- forecast(
+  model = model.ardl2,
+  x = matrix(test2$Advertising, nrow = 1),
+  h = 10
+)
+
+fore.ardl2
+```
+
+```{r}
+mape.ardl2 <- MLmetrics::MAPE(
+  fore.ardl2$forecasts,
+  test2$Sales
+)
+
+mape.ardl2
+```
+
+```{r}
+# akurasi data training
+GoF(model.ardl2)
+```
+
+### *Lag* Optimum
+
+Untuk menentukan kombinasi lag ARDL terbaik digunakan fungsi `ardlBoundOrders()` dengan kriteria AIC. Pencarian dibatasi maksimum 6 lag untuk peubah independen dan dependen.
+
+```{r}
+model.ardl2.orders <- ardlBoundOrders(
+  data = data.frame(train2[, c("Sales", "Advertising")]),
+  formula = Sales ~ Advertising,
+  ic = "AIC",
+  max.p = 6,
+  max.q = 6
+)
+
+model.ardl2.orders
+```
+
+```{r}
+p.opt2 <- as.integer(model.ardl2.orders$p)
+q.opt2 <- as.integer(model.ardl2.orders$q)
+aic.opt2 <- model.ardl2.orders$min.Stat
+
+data.frame(
+  p_optimum = p.opt2,
+  q_optimum = q.opt2,
+  AIC = aic.opt2
+)
+```
+
+Berdasarkan AIC, model ARDL optimum diperoleh pada $p=$ `r p.opt2` dan $q=$ `r q.opt2`, dengan nilai AIC sebesar `r round(aic.opt2, 4)`.
+
+Selanjutnya dilakukan pemodelan menggunakan nilai $p$ dan $q$ optimum tersebut.
+
+```{r}
+model.ardl2.opt <- ardlDlm(
+  formula = Sales ~ Advertising,
+  data = train2,
+  p = p.opt2,
+  q = q.opt2
+)
+
+summary(model.ardl2.opt)
+```
+
+```{r}
+AIC(model.ardl2.opt)
+BIC(model.ardl2.opt)
+```
+
+### Peramalan Model ARDL Optimum
+
+```{r}
+fore.ardl2.opt <- forecast(
+  model = model.ardl2.opt,
+  x = matrix(test2$Advertising, nrow = 1),
+  h = 10
+)
+
+fore.ardl2.opt
+```
+
+```{r}
+mape.ardl2.opt <- MLmetrics::MAPE(
+  fore.ardl2.opt$forecasts,
+  test2$Sales
+)
+
+mape.ardl2.opt
+```
+
+```{r}
+# akurasi data training
+GoF(model.ardl2.opt)
+```
+
+## Perbandingan Model Latihan 2
+
+Model ARDL awal dan model ARDL dengan lag optimum dibandingkan menggunakan nilai MAPE pada data *testing*.
+
+```{r}
+akurasi2 <- data.frame(
+  Model = c("ARDL(1,1)", paste0("ARDL(", p.opt2, ",", q.opt2, ")")),
+  MAPE = c(mape.ardl2, mape.ardl2.opt)
+)
+
+akurasi2 <- akurasi2[order(akurasi2$MAPE), ]
+row.names(akurasi2) <- NULL
+akurasi2
+```
+
+```{r}
+model.terbaik2 <- akurasi2$Model[1]
+mape.terbaik2  <- akurasi2$MAPE[1]
+
+model.terbaik2
+mape.terbaik2
+```
+
+Berdasarkan nilai MAPE pada data *testing*, model terbaik untuk Latihan 2 adalah **`r model.terbaik2`** dengan MAPE sebesar **`r round(mape.terbaik2, 4)`**.
+
+### Plot Perbandingan
+
+```{r}
+plot(test2$Year, test2$Sales,
+     type = "b", pch = 16,
+     ylim = range(c(test2$Sales,
+                    fore.ardl2$forecasts,
+                    fore.ardl2.opt$forecasts)),
+     xlab = "Year",
+     ylab = "Sales",
+     main = "Perbandingan Aktual dan Hasil Peramalan ARDL")
+
+lines(test2$Year, fore.ardl2$forecasts, type = "b", pch = 1)
+lines(test2$Year, fore.ardl2.opt$forecasts, type = "b", pch = 2)
+
+legend("topleft",
+       legend = c("Aktual", "ARDL(1,1)", paste0("ARDL(", p.opt2, ",", q.opt2, ")")),
+       lty = 1,
+       pch = c(16, 1, 2),
+       cex = 0.8)
+```
+
+# Kesimpulan
+
+```
+
