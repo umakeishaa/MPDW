@@ -1,0 +1,543 @@
+---
+title: "Pemodelan ARIMA - Data Kelompok"
+author: "Uma Keisha Abriana"
+date: "2026-09-30"
+output:
+  html_document:
+    theme: yeti
+    toc: true
+    toc_float: true
+---
+
+## Packages
+
+```{r}
+library(ggplot2)
+library(tsibble)
+library(tseries)
+library(MASS)
+library(forecast)
+library(TSA)
+library(TTR)
+library(aTSA)
+library(graphics)
+library(readxl)
+```
+
+## Data Real
+
+Digunakan data CPIAUCSL_PC1 (perubahan persentase CPI dibanding tahun
+sebelumnya, bulanan) yang dalam hal ini hanya digunakan data 100 periode
+awal (Januari 1948 - April 1956).
+
+```{r}
+datacpi <- read_excel("D:\\SEM 5\\MPDW\\CPIAUCSL_PC1.xlsx", sheet = "Monthly")
+
+# Hanya kolom 1-2 (tanggal & nilai), lalu ambil 100 data pertama
+datacpi <- as.data.frame(datacpi[, 1:2])
+colnames(datacpi) <- c("tanggal", "cpi")
+datacpi <- datacpi[1:100,]
+datacpi.ts <- ts(datacpi$cpi)
+
+datacpi
+```
+
+### Eksplorasi Data
+
+#### Plot Data Penuh
+
+```{r}
+plot.ts(datacpi.ts, 
+        lty = 1, 
+        xlab = "Waktu", 
+        ylab = "CPIAUCSL_PC1", 
+        main = "Plot Data CPIAUCSL_PC1")
+```
+
+Berdasarkan plot data deret waktu, terlihat bahwa data tidak bergerak
+di sekitar satu nilai tengah tertentu, melainkan naik-turun dengan pola
+yang panjang (tren / siklus). Pembagian data latih dan data uji
+ditetapkan dengan proporsi 80%:20%, yaitu 80 data latih dan 20 data
+uji.
+
+#### Plot Data Latih
+
+```{r}
+cpitrain <- datacpi$cpi[1:80]
+train.ts <- ts(cpitrain)
+plot.ts(train.ts, lty=1, xlab="waktu", ylab="CPIAUCSL_PC1", main="Plot CPI Train")
+```
+
+Berdasarkan plot data deret waktu pada data latih, terlihat bahwa data
+cenderung tidak bergerak pada nilai tengah tertentu. Hal ini
+mengindikasikan bahwa data tidak stasioner dalam rataan.
+
+#### Plot Data Uji
+
+```{r}
+cpitest <- datacpi$cpi[81:100]
+test.ts <- ts(cpitest)
+plot.ts(test.ts, lty=1, xlab="waktu", ylab="CPIAUCSL_PC1", main="Plot CPI Test")
+```
+
+### Uji Stasioneritas Data
+
+#### Plot ACF
+
+```{r}
+acf(train.ts)
+```
+
+Berdasarkan plot ACF, terlihat bahwa plot ACF data menurun secara
+perlahan (*tails of slowly*). Hal ini menjadi indikasi bahwa data tidak
+stasioner dalam rataan.
+
+#### Uji ADF
+
+```{r}
+tseries::adf.test(train.ts)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Berdasarkan uji ADF tersebut, didapat *p-value* sebesar 0.3693 yang
+lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan
+bahwa data tidak stasioner dalam rataan. Hal ini sesuai dengan hasil
+eksplorasi menggunakan plot time series dan plot ACF, sehingga
+ketidakstasioneran data harus ditangani.
+
+#### Plot Box-Cox
+
+Data CPIAUCSL_PC1 memiliki nilai negatif, sedangkan Box-Cox hanya
+berlaku untuk data positif. Oleh karena itu, data digeser (ditambah
+konstanta) terlebih dahulu agar seluruh nilainya positif.
+
+```{r}
+index <- seq(1:80)
+
+# Geser data agar > 0
+min_val <- min(train.ts)
+if (min_val <= 0) {
+  c <- abs(min_val) + 1
+  train.shifted <- train.ts + c
+} else {
+  train.shifted <- train.ts
+}
+
+# Box-Cox
+bc <- boxcox(train.shifted ~ index, lambda = seq(-2, 2, by = 0.1))
+
+# Nilai lambda optimum (rounded)
+lambda_opt <- bc$x[which.max(bc$y)]
+lambda_opt
+
+# Selang kepercayaan 95% untuk lambda
+ci_lambda <- bc$x[bc$y > max(bc$y) - 0.5 * qchisq(0.95, df = 1)]
+
+# Batas bawah dan batas atas
+ci_lower <- min(ci_lambda)
+ci_upper <- max(ci_lambda)
+
+c(Batas_Bawah = ci_lower, Batas_Atas = ci_upper)
+```
+
+Nilai $\lambda$ optimum sebesar 0.505 dengan selang kepercayaan 95%
+berkisar 0.18 sampai 0.83. Selang tersebut tidak memuat nilai satu
+sehingga data latih belum stasioner dalam ragam. Namun, pada
+praktikum ini penanganan difokuskan pada kestasioneran dalam rataan
+melalui differencing, kemudian kestasioneran ragam dicek kembali pada
+data hasil differencing.
+
+### Penanganan Ketidakstasioneran Data
+
+#### Differencing Pertama
+
+```{r}
+# Differencing pertama
+train.diff1 <- diff(train.ts, differences = 1) 
+
+# Plot hasil differencing
+plot.ts(train.diff1, lty=1, xlab="waktu", ylab="Data Difference 1 CPI", main="Plot Difference 1 CPI")
+```
+
+```{r}
+acf(train.diff1)
+```
+
+```{r}
+tseries::adf.test(train.diff1)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Berdasarkan uji ADF tersebut, didapat *p-value* sebesar 0.2521 yang
+lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan
+bahwa data hasil differencing pertama **masih belum stasioner** dalam
+rataan. Oleh karena itu, dilakukan differencing kedua.
+
+#### Differencing Kedua
+
+```{r}
+# Differencing kedua
+train.diff <- diff(train.ts, differences = 2) 
+
+# Plot hasil differencing
+plot.ts(train.diff, lty=1, xlab="waktu", ylab="Data Difference 2 CPI", main="Plot Difference 2 CPI")
+```
+
+Berdasarkan plot data deret waktu, terlihat bahwa data hasil
+differencing kedua bergerak di sekitar nilai tengah nol (tidak terdapat
+tren pada data).
+
+#### Plot ACF
+
+```{r}
+acf(train.diff)
+```
+
+Berdasarkan plot tersebut, terlihat bahwa plot ACF tidak lagi menurun
+secara perlahan, melainkan langsung terpotong (spike signifikan hanya
+pada lag-lag awal). Hal ini mengindikasikan data sudah stasioner dalam
+rataan.
+
+#### Uji ADF
+
+```{r}
+tseries::adf.test(train.diff)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Jika *p-value* \< 0.05 (pada perhitungan awal statistik uji ADF sekitar
+-5.89 sehingga *p-value* dilaporkan 0.01) maka tolak $H_0$ dan data
+hasil differencing kedua stasioner dalam rataan sehingga dapat
+dilanjutkan ke pemodelan dengan $d = 2$.
+
+```{r}
+library(MASS)
+
+# 1. Sesuaikan panjang index karena differencing menghilangkan observasi awal
+index_diff <- seq(1:length(train.diff))
+
+# 2. Cek apakah ada nilai negatif/nol. Jika ada, tambahkan konstanta (c) 
+# agar nilai minimum data menjadi > 0 (misalnya menjadi 1)
+min_val <- min(train.diff)
+
+if (min_val <= 0) {
+  c <- abs(min_val) + 1
+  train.diff_shifted <- train.diff + c
+} else {
+  train.diff_shifted <- train.diff
+}
+
+# 3. Plot Box-Cox pada data yang sudah di-shift
+bc_diff <- boxcox(train.diff_shifted ~ index_diff, lambda = seq(-2, 2, by = 0.1))
+
+# 4. Nilai lambda optimum (rounded)
+lambda_opt_diff <- bc_diff$x[which.max(bc_diff$y)]
+print(paste("Lambda optimum setelah diff:", lambda_opt_diff))
+
+# 5. Selang kepercayaan 95% untuk lambda
+ci_lambda_diff <- bc_diff$x[bc_diff$y > max(bc_diff$y) - 0.5 * qchisq(0.95, df = 1)]
+
+# Batas bawah dan batas atas
+ci_lower_diff <- min(ci_lambda_diff)
+ci_upper_diff <- max(ci_lambda_diff)
+
+c(Batas_Bawah = ci_lower_diff, Batas_Atas = ci_upper_diff)
+```
+
+Jika selang kepercayaan 95% untuk $\lambda$ memuat nilai 1, maka data
+hasil differencing kedua dapat dikatakan stasioner dalam ragam.
+**Cocokkan dengan output Anda.**
+
+### Identifikasi Model
+
+#### Plot ACF
+
+```{r}
+acf(train.diff)
+```
+
+Pada perhitungan awal, ACF data differencing kedua signifikan pada lag
+ke-1 (bernilai negatif sekitar -0.30) dan lag-lag berikutnya berada di
+sekitar batas signifikansi. Perhatikan lag mana saja yang keluar dari
+batas pada plot Anda.
+
+#### Plot PACF
+
+```{r}
+pacf(train.diff)
+```
+
+Pada perhitungan awal, PACF signifikan pada lag ke-1 dan ke-2 (dan
+mendekati batas pada lag ke-4). Jika PACF dianggap *cuts off* pada lag
+ke-2 dan ACF *tails off*, maka model tentatifnya adalah ARIMA(2,2,0).
+Jika ACF dianggap *cuts off* pada lag ke-1 dan PACF *tails off*, maka
+model tentatifnya adalah ARIMA(0,2,1). Jika keduanya *tails off*, model
+yang terbentuk adalah ARIMA(1,2,1).
+
+#### Plot EACF
+
+```{r}
+eacf(train.diff)
+```
+
+Identifikasi model menggunakan plot EACF dilakukan dengan melihat ujung
+segitiga pada pola segitiga nol. Tambahkan kandidat dari ujung segitiga
+EACF Anda. Pada kode berikut digunakan kandidat ARIMA(0,2,1),
+ARIMA(2,2,0), ARIMA(1,2,1), ARIMA(0,2,2), dan ARIMA(1,2,2).
+
+### Pendugaan Parameter Model Tentatif
+
+#### ARIMA(0,2,1)
+
+```{r}
+model1.da=Arima(train.diff, order=c(0,0,1),method="ML")
+summary(model1.da) 
+lmtest::coeftest(model1.da) 
+```
+
+#### ARIMA(2,2,0)
+
+```{r}
+model2.da=Arima(train.diff, order=c(2,0,0),method="ML")
+summary(model2.da) 
+lmtest::coeftest(model2.da) 
+```
+
+#### ARIMA(1,2,1)
+
+```{r}
+model3.da=Arima(train.diff, order=c(1,0,1),method="ML")
+summary(model3.da) 
+lmtest::coeftest(model3.da) 
+```
+
+#### ARIMA(0,2,2)
+
+```{r}
+model4.da=Arima(train.diff, order=c(0,0,2),method="ML")
+summary(model4.da) 
+lmtest::coeftest(model4.da) 
+```
+
+#### ARIMA(1,2,2)
+
+```{r}
+model5.da=Arima(train.diff, order=c(1,0,2),method="ML")
+summary(model5.da) 
+lmtest::coeftest(model5.da) 
+```
+
+### Ringkasan AIC
+
+```{r}
+model_tentatif <- data.frame(
+  Model = c("ARIMA(0,2,1)","ARIMA(2,2,0)","ARIMA(1,2,1)", "ARIMA(0,2,2)",
+            "ARIMA(1,2,2)"),
+  AIC   = c(AIC(model1.da),AIC(model2.da), AIC(model3.da), AIC(model4.da), AIC(model5.da)),
+  BIC   = c(BIC(model1.da),BIC(model2.da), BIC(model3.da), BIC(model4.da), BIC(model5.da))
+)
+
+model_tentatif
+```
+
+Model terbaik dipilih berdasarkan nilai AIC terkecil **dan** parameter
+model yang signifikan (cek `coeftest` di atas). Pilih satu model, lalu
+tetapkan pada chunk berikut. Secara default, kode memilih model dengan
+AIC terkecil; jika model tersebut memiliki parameter yang tidak
+signifikan, ganti dengan model lain yang lebih layak.
+
+```{r}
+daftar_model <- list(model1.da, model2.da, model3.da, model4.da, model5.da)
+idx_terbaik  <- which.min(model_tentatif$AIC)
+model_terbaik <- daftar_model[[idx_terbaik]]
+model_tentatif$Model[idx_terbaik]
+```
+
+### Analisis Sisaan
+
+Model terbaik hasil identifikasi kemudian dicek asumsi sisaannya. Sisaan
+model ARIMA harus memenuhi asumsi normalitas, kebebasan sisaan, dan
+kehomogenan ragam. Diagnostik model dilakukan secara eksplorasi dan uji
+formal.
+
+#### Eksplorasi Sisaan
+
+```{r}
+sisaan.da <- model_terbaik$residuals
+
+par(mfrow = c(2,2),    
+    mar = c(4,4,2,1),  
+    oma = c(0,0,2,0))  
+
+# Q-Q Plot
+qqnorm(sisaan.da, main = "Normal Q-Q Plot")
+qqline(sisaan.da, col = "blue", lwd = 2)
+
+# Plot Sisaan vs Waktu
+plot(sisaan.da, type = "p",
+     main = "Plot Sisaan vs Waktu",
+     xlab = "Waktu", ylab = "Sisaan")
+
+# ACF
+acf(sisaan.da, main = "ACF Sisaan")
+
+# PACF
+pacf(sisaan.da, main = "PACF Sisaan")
+
+par(mfrow = c(1,1))
+```
+
+Amati plot kuantil-kuantil normal (apakah titik mengikuti garis
+$45^{\circ}$), plot sisaan terhadap waktu (apakah lebar pita relatif
+sama), serta plot ACF dan PACF sisaan (apakah ada *spike* signifikan).
+Kondisi ini diuji lebih lanjut dengan uji formal.
+
+#### Uji Formal
+
+```{r}
+#1) Sisaan Menyebar Normal 
+ks.test(sisaan.da,"pnorm")
+```
+
+$H_0$ : Sisaan menyebar normal
+
+$H_1$ : Sisaan tidak menyebar normal
+
+Jika *p-value* \> 0.05 maka gagal tolak $H_0$ (sisaan menyebar normal).
+
+```{r}
+#2) Sisaan saling bebas/tidak ada autokorelasi 
+Box.test(sisaan.da, type = "Ljung")
+```
+
+$H_0$ : Sisaan saling bebas
+
+$H_1$ : Sisaan tidak saling bebas
+
+Jika *p-value* \> 0.05 maka gagal tolak $H_0$ (sisaan saling bebas).
+
+```{r}
+#3) Sisaan homogen 
+Box.test((sisaan.da)^2, type = "Ljung")
+```
+
+$H_0$ : Ragam sisaan homogen
+
+$H_1$ : Ragam sisaan tidak homogen
+
+Jika *p-value* \> 0.05 maka gagal tolak $H_0$ (ragam sisaan homogen).
+
+```{r}
+#4) Nilai tengah sisaan sama dengan nol 
+t.test(sisaan.da, mu = 0, conf.level = 0.95)
+```
+
+$H_0$ : nilai tengah sisaan sama dengan 0
+
+$H_1$ : nilai tengah sisaan tidak sama dengan 0
+
+Jika *p-value* \> 0.05 maka gagal tolak $H_0$ (nilai tengah sisaan sama
+dengan nol).
+
+### Overfitting
+
+Tahapan selanjutnya adalah *overfitting* dengan menaikkan orde AR(p)
+dan MA(q) dari model terbaik untuk melihat apakah ada model lain yang
+lebih baik. Sebagai contoh, jika model terbaik adalah ARIMA(0,2,2),
+kandidat *overfitting* adalah ARIMA(1,2,2) dan ARIMA(0,2,3). Sesuaikan
+dengan model terbaik Anda.
+
+```{r}
+model6.da=Arima(train.diff, order=c(0,0,3),method="ML")
+summary(model6.da) 
+lmtest::coeftest(model6.da) 
+```
+
+```{r}
+overfitting <- data.frame(
+  Model = c("ARIMA(0,2,2)", "ARIMA(1,2,2)", "ARIMA(0,2,3)"),
+  AIC   = c(AIC(model4.da), AIC(model5.da), AIC(model6.da)),
+  BIC   = c(BIC(model4.da), BIC(model5.da), BIC(model6.da))
+)
+
+overfitting
+```
+
+Jika model hasil *overfitting* tidak memiliki AIC yang lebih kecil dan
+parameternya tidak seluruhnya signifikan, maka model awal tetap
+digunakan untuk peramalan.
+
+### Model Terbaik
+
+Model terbaik yang digunakan untuk peramalan adalah `model_terbaik`
+hasil pemilihan di atas (atau model hasil *overfitting* jika lebih
+baik).
+
+```{r}
+summary(model_terbaik)
+lmtest::coeftest(model_terbaik)
+```
+
+### Peramalan
+
+Peramalan dilakukan menggunakan fungsi `forecast()`. Peramalan berikut
+ini dilakukan untuk 20 periode ke depan (sepanjang data uji).
+
+```{r}
+# ---FORECAST---
+ramalan.da <- forecast::forecast(model_terbaik, h = length(test.ts))
+ramalan.da
+```
+
+```{r}
+data.ramalan.da <- ramalan.da$mean
+plot(ramalan.da)
+```
+
+Hasil ramalan di atas adalah ramalan untuk data differencing kedua,
+sehingga perlu dikembalikan ke skala data asli dengan *inverse
+differencing* sebanyak dua kali. Karena $d = 2$, dibutuhkan **dua nilai
+terakhir** data latih sebagai nilai awal (`xi`), dan **dua nilai
+pertama** hasil `diffinv` dibuang.
+
+```{r}
+# Inverse differencing (d = 2)
+pt_akhir_train <- tail(train.ts, 2) 
+
+forecast <- diffinv(data.ramalan.da, differences = 2, xi = pt_akhir_train)
+hasil <- forecast[-c(1:2)]
+
+# Bandingkan aktual vs forecast
+perbandingan.da <- cbind(
+  Aktual   = test.ts,
+  Forecast = hasil
+)
+
+print(head(perbandingan.da, 10))   
+
+# Hitung akurasi
+akurasi_test <- accuracy(hasil, test.ts)
+akurasi_test
+```
+
+```{r}
+# Plot data
+ts.plot(datacpi.ts, col = "black", lty = 1,
+        xlab = "Waktu", ylab = "CPIAUCSL_PC1")
+
+# Garis forecast
+lines(81:(80+length(hasil)), hasil, col = "blue", lty = 2, lwd = 2)
+legend("topleft", 
+       legend = c("Data Aktual", "Forecast"),
+       col = c("black", "blue"),
+       lty = c(1,2), lwd = c(1,2), bty = "n")
+```
